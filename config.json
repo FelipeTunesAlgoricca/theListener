@@ -1,0 +1,10 @@
+{
+    "hl": "pt-BR",
+    "tz": 360,
+    "timeout": [10, 25],
+    "keywords": ["gta 6"],
+    "base_delay": 30,
+    "timeframe": "today 12-m",
+    "geo": "BR-PR"
+  }
+  

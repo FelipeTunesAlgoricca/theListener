@@ -1,22 +1,28 @@
 from pytrends.request import TrendReq
 import time
+import json
 
-pytrends = TrendReq(hl='pt-BR', tz=360, timeout=(10,25))
-keywords = ["gta 6"]
-base_delay = 30  # Tempo inicial de espera de 30 segundos
+# Carregar configurações do arquivo JSON
+with open('config.json', 'r') as config_file:
+    config = json.load(config_file)
 
-for keyword in keywords:
+# Inicializar o objeto pytrends com configurações carregadas
+pytrends = TrendReq(hl=config['hl'], tz=config['tz'], timeout=tuple(config['timeout']))
+
+for keyword in config['keywords']:
     attempt = 0
     success = False
     while not success and attempt < 5:  # Tentar até 5 vezes
         try:
-            pytrends.build_payload(kw_list=[keyword], timeframe='today 12-m', geo='BR')
+            # Construir a carga de trabalho com a palavra-chave e configurações
+            pytrends.build_payload(kw_list=[keyword], timeframe=config['timeframe'], geo=config['geo'])
 
             # Obter consultas relacionadas
             related_queries_dict = pytrends.related_queries()
             top_queries = related_queries_dict[keyword]['top']
             rising_queries = related_queries_dict[keyword]['rising']
 
+            # Imprimir consultas relacionadas
             print(f"Principais consultas relacionadas a {keyword}:")
             print(top_queries)
             print(f"\nConsultas em ascensão relacionadas a {keyword}:")
@@ -27,12 +33,14 @@ for keyword in keywords:
             print(f"\nInteresse por região para '{keyword}':")
             print(interest_by_region_df)
 
-            success = True
+            success = True  # Se tudo der certo, defina sucesso como verdadeiro
+
         except Exception as e:
+            # Verificar se o erro é um erro 429 (muitas solicitações)
             if '429' in str(e):
                 attempt += 1
-                delay = base_delay * (2 ** attempt)  # Backoff exponencial
+                delay = config['base_delay'] * (2 ** attempt)  # Backoff exponencial
                 print(f"Erro 429, tentando novamente após {delay} segundos.")
-                time.sleep(delay)
+                time.sleep(delay)  # Esperar antes de tentar novamente
             else:
-                raise e
+                raise e  # Se for outro erro, levantar exceção

@@ -1,103 +1,83 @@
-from textblob import TextBlob
-from textblob.sentiments import NaiveBayesAnalyzer
-import requests
+from pytrends.request import TrendReq
+import time
+import json
 import pandas as pd
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud
-import nltk
 
-# Baixar as stopwords em português
-nltk.download('stopwords')
-from nltk.corpus import stopwords
-stopwords_pt = set(stopwords.words('portuguese'))
+# Carregar configurações do arquivo JSON
+with open('config.json', 'r') as config_file:
+    config = json.load(config_file)
 
-# Função para realizar a busca no Google Custom Search
-def buscar_google(api_key, cse_id, query, num=10):
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        'key': api_key,
-        'cx': cse_id,
-        'q': query,
-        'num': num
-    }
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()  # Irá disparar uma exceção para respostas não-200
-        return response.json()
-    except requests.HTTPError as http_err:
-        print(f"HTTP error occurred: {http_err}")
-    except Exception as err:
-        print(f"An error occurred: {err}")
+# Inicializar o objeto pytrends com configurações carregadas
+pytrends = TrendReq(hl=config['hl'], tz=config['tz'], timeout=tuple(config['timeout']))
 
-# Função para analisar o sentimento de um texto
-def analisar_sentimento(texto):
-    blob = TextBlob(texto, analyzer=NaiveBayesAnalyzer())
-    return blob.sentiment
+# Estrutura para armazenar todos os dados
+all_data = []
+all_data_df = pd.DataFrame()
 
-# Função para gerar a nuvem de palavras
-def gerar_nuvem_de_palavras(textos, titulo):
-    texto_unificado = ' '.join(textos).lower()
-    texto_unificado = ''.join([char for char in texto_unificado if char.isalpha() or char.isspace()])
-    wordcloud = WordCloud(width=800, height=400, background_color='white', stopwords=stopwords_pt).generate(texto_unificado)
-    plt.figure(figsize=(10, 5))
-    plt.imshow(wordcloud, interpolation='bilinear')
-    plt.axis('off')
-    plt.title(titulo)
-    plt.show()
+# Definir o ID da categoria
+category_id = 19
 
-# Substitua pelas suas chaves de API e CSE
-api_key = 'AIzaSyAw9ZoaiuKW-3jA1WjbS6yKn8NcOyMHJxA'
-cse_id = '5423e72690868452f'
+for keyword in config['keywords']:
+    attempt = 0
+    success = False
+    while not success and attempt < 5:  # Tentar até 5 vezes
+        try:
+            # Incluir o ID da categoria no payload
+            pytrends.build_payload(kw_list=[keyword], timeframe=config['timeframe'], geo=config['geo'], cat=category_id)
 
-# Lista com os nomes dos três políticos
-politicos = ['biden', ' hilary clinton', 'trump']
+            # Obter consultas relacionadas e interesse por região
+            related_queries_dict = pytrends.related_queries()
+            interest_by_region_df = pytrends.interest_by_region()
 
-# Lista para armazenar os sentimentos e outros dados
-dados_coletados = []
+            # Processar dados de consultas relacionadas
+            top_queries_df = pd.DataFrame(related_queries_dict[keyword]['top'])
+            rising_queries_df = pd.DataFrame(related_queries_dict[keyword]['rising'])
 
-# Busca e análise de sentimentos
-for politico in politicos:
-    resultados = buscar_google(api_key, cse_id, politico)
-    if resultados:
-        textos_para_nuvem = []
-        for item in resultados.get('items', []):
-            analise = analisar_sentimento(item['snippet'])
-            dados_coletados.append({
-                'Político': politico,
-                'Sentimento': analise.classification,
-                'Subjetividade': analise.p_pos - analise.p_neg,
-                'Snippet': item['snippet'],
-                'Título': item['title'],
-                'Link': item['link']
+            # Imprimir consultas relacionadas
+            print(f"Principais consultas relacionadas a {keyword}:")
+            print(top_queries_df)
+            print(f"\nConsultas em ascensão relacionadas a {keyword}:")
+            print(rising_queries_df)
+
+            # Obter interesse por região
+            print(f"\nInteresse por região para '{keyword}':")
+            print(interest_by_region_df)
+
+            # Adicionar ao DataFrame geral
+            if not top_queries_df.empty:
+                top_queries_df['keyword'] = keyword
+                top_queries_df['type'] = 'top'
+                all_data_df = pd.concat([all_data_df, top_queries_df])
+
+            if not rising_queries_df.empty:
+                rising_queries_df['keyword'] = keyword
+                rising_queries_df['type'] = 'rising'
+                all_data_df = pd.concat([all_data_df, rising_queries_df])
+
+            # Adicionar ao array para JSON
+            all_data.append({
+                'keyword': keyword,
+                'top_queries': related_queries_dict[keyword]['top'],
+                'rising_queries': related_queries_dict[keyword]['rising'],
+                'interest_by_region': interest_by_region_df.to_dict()
             })
-            textos_para_nuvem.append(item['snippet'])
 
-        # Geração da nuvem de palavras para cada político
-        gerar_nuvem_de_palavras(textos_para_nuvem, f'Palavras Mais Usadas: {politico}')
+            success = True
+        except Exception as e:
+            if '429' in str(e):
+                attempt += 1
+                delay = config['base_delay'] * (2 ** attempt)
+                print(f"Erro 429, tentando novamente após {delay} segundos.")
+                time.sleep(delay)
+            else:
+                raise e
 
-# Cria um DataFrame com os dados
-df_sentimentos = pd.DataFrame(dados_coletados)
+# Salvar os dados em um arquivo CSV
+csv_filename = f'{keyword}_pytrends_data.csv'
+all_data_df.to_csv(csv_filename, index=False)
 
-# Exibe os resultados
-print(df_sentimentos)
-
-# Calcula a média de sentimento para cada político e exibe
-# Isso foi alterado para refletir o sentimento como classificação em vez de polaridade
-df_media_sentimentos = df_sentimentos.groupby('Político').apply(
-    lambda x: pd.Series({
-        'Sentimento_Pos': (x['Sentimento'] == 'pos').mean(),
-        'Sentimento_Neg': (x['Sentimento'] == 'neg').mean()
-    })
-).reset_index()
-
-print(df_media_sentimentos)
-
-# Criação do gráfico de barras para a média dos sentimentos
-plt.figure(figsize=(10, 5))
-plt.bar(df_media_sentimentos['Político'], df_media_sentimentos['Sentimento_Pos'], label='Positivo', alpha=0.6)
-plt.bar(df_media_sentimentos['Político'], df_media_sentimentos['Sentimento_Neg'], label='Negativo', alpha=0.6, bottom=df_media_sentimentos['Sentimento_Pos'])
-plt.xlabel('Político')
-plt.ylabel('Média de Sentimento')
-plt.title('Média de Sentimento por Político')
-plt.legend()
-plt.show()
+# Salvar os dados em um arquivo JSON
+json_filename = f'{keyword}_pytrends_data.json'
+df = pd.DataFrame(all_data)
+df.to_json(json_filename, orient='records', lines=True)
+print(f"Dados salvos no arquivo {json_filename}")
